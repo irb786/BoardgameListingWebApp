@@ -1,0 +1,83 @@
+pipeline {
+    agent any
+    tools {
+        jdk 'jdk17'
+        maven 'maven3'
+    }
+    environment {
+        SCANNER_HOME = tool 'sonar-scanner'
+    }
+
+    stages {
+        stage('Git Checkout') {
+            steps {
+                git branch: 'master', url: 'https://github.com/irb786/BoardgameListingWebApp.git'
+            }
+        }
+
+        stage('Code Compilation') {
+            steps {
+                sh "mvn clean compile"
+            }
+        }
+
+
+        stage('Maven Package') {
+            steps {
+                sh "mvn clean package"
+            }
+        }
+       
+
+        stage('SonarQube Analysis') {
+            steps {
+                withSonarQubeEnv('sonar') {
+                    sh ''' 
+                    $SCANNER_HOME/bin/sonar-scanner -Dsonar.projectName=irb \
+                    -Dsonar.java.binaries=. \
+                    -Dsonar.projectKey=irb 
+                    '''
+                }
+            }
+        }
+
+        stage('OWASP Dependency Check') {
+            steps {
+               dependencyCheck additionalArguments: ' --scan ./ ', odcInstallation: 'dependencyCheck'
+               dependencyCheckPublisher pattern: '**/dependency-check-report.xml'
+   	    }
+        }
+   
+        stage('Deploy To Nexus') {
+            steps {
+               withMaven(globalMavenSettingsConfig: 'bccce082-7880-4fba-a135-4d2228c5fc4c') {
+                    sh "mvn deploy"
+               }
+            }
+        }
+        
+        stage('Build Image') {
+            steps {             
+                 sh " docker build -t appgame:dev ."
+                 sh " docker tag appgame:dev irb786/irb:dev"
+                 sh " docker push irb786/irb:dev"
+           
+            }
+        }
+        
+        stage('Trivy Image Scan') {
+            steps {          
+                 sh " trivy image irb786/irb:dev"              
+            }
+        }
+
+        stage('Deploy To K8s Cluster') {
+            steps {             
+                sh "kubectl apply -f k8sDeployment.yml"
+                sh "kubectl get pods"   
+                sh "kubectl get svc"                  
+            }
+        }
+        
+    }
+}
